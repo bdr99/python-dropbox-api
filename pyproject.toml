@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "python_dropbox_api", from = "src"}]
+packages = [
+  {include = "python_dropbox_api"},
+  {include = "python_dropbox_api/py.typed"},
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
