@@ -4,7 +4,11 @@ import json
 from aiohttp import ClientResponse
 
 from .auth import Auth
-from .exceptions import DropboxAuthException, DropboxFileOrFolderNotFoundException
+from .exceptions import (
+    DropboxAuthException,
+    DropboxFileOrFolderNotFoundException,
+    DropboxUnknownException,
+)
 from .models import (
     AccountInfo,
     FileOrFolderInfo,
@@ -61,94 +65,105 @@ class DropboxAPIClient:
         Returns:
             AccountInfo containing account_id, email, and display_name.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "",
+            }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/users/get_current_account"
+            url = f"{DROPBOX_API_BASE_URL}/2/users/get_current_account"
 
-        async with self._websession.post(url, headers=headers) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(url, headers=headers) as response:
+                await handle_common_errors(response)
 
-            response_json = await response.json()
+                response_json = await response.json()
 
-            return AccountInfo(
-                account_id=response_json["account_id"],
-                email=response_json["email"],
-                display_name=response_json["name"]["display_name"],
-            )
+                return AccountInfo(
+                    account_id=response_json["account_id"],
+                    email=response_json["email"],
+                    display_name=response_json["name"]["display_name"],
+                )
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def list_folder(
         self, path: str, include_property_groups: list[str] | None = None
     ) -> list[FileOrFolderInfo]:
         """List the contents of a folder with pagination support."""
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        access_token = await self._auth.async_get_access_token()
-
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
-
-        # Initial request data
-        data = {
-            "include_deleted": False,
-            "include_has_explicit_shared_members": False,
-            "include_media_info": False,
-            "include_mounted_folders": True,
-            "include_non_downloadable_files": False,
-            "path": path,
-            "recursive": False,
-        }
-
-        if include_property_groups is not None:
-            data["include_property_groups"] = {
-                ".tag": "filter_some",
-                "filter_some": include_property_groups,
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
             }
 
-        all_entries = []
-        cursor = None
-        has_more = True
+            # Initial request data
+            data = {
+                "include_deleted": False,
+                "include_has_explicit_shared_members": False,
+                "include_media_info": False,
+                "include_mounted_folders": True,
+                "include_non_downloadable_files": False,
+                "path": path,
+                "recursive": False,
+            }
 
-        while has_more:
-            # Use list_folder endpoint for first request, list_folder/continue for subsequent ones
-            if cursor is None:
-                url = f"{DROPBOX_API_BASE_URL}/2/files/list_folder"
-                request_data = data
-            else:
-                url = f"{DROPBOX_API_BASE_URL}/2/files/list_folder/continue"
-                request_data = {"cursor": cursor}
+            if include_property_groups is not None:
+                data["include_property_groups"] = {
+                    ".tag": "filter_some",
+                    "filter_some": include_property_groups,
+                }
 
-            async with self._websession.post(
-                url, headers=headers, json=request_data
-            ) as response:
-                await handle_common_errors(response)
+            all_entries = []
+            cursor = None
+            has_more = True
 
-                response_json = await response.json()
+            while has_more:
+                # Use list_folder endpoint for first request, list_folder/continue for subsequent ones
+                if cursor is None:
+                    url = f"{DROPBOX_API_BASE_URL}/2/files/list_folder"
+                    request_data = data
+                else:
+                    url = f"{DROPBOX_API_BASE_URL}/2/files/list_folder/continue"
+                    request_data = {"cursor": cursor}
 
-                # Add entries from this page to our collection
-                page_entries = [
-                    FileOrFolderInfo(
-                        is_folder=file[".tag"] == "folder",
-                        name=file["name"],
-                        size=file["size"] if file[".tag"] == "file" else None,
-                        property_groups=parse_property_groups(file["property_groups"])
-                        if "property_groups" in file
-                        else None,
-                    )
-                    for file in response_json["entries"]
-                ]
-                all_entries.extend(page_entries)
+                async with self._websession.post(
+                    url, headers=headers, json=request_data
+                ) as response:
+                    await handle_common_errors(response)
 
-                # Check if there are more pages
-                has_more = response_json.get("has_more", False)
-                cursor = response_json.get("cursor")
+                    response_json = await response.json()
 
-        return all_entries
+                    # Add entries from this page to our collection
+                    page_entries = [
+                        FileOrFolderInfo(
+                            is_folder=file[".tag"] == "folder",
+                            name=file["name"],
+                            size=file["size"] if file[".tag"] == "file" else None,
+                            property_groups=parse_property_groups(
+                                file["property_groups"]
+                            )
+                            if "property_groups" in file
+                            else None,
+                        )
+                        for file in response_json["entries"]
+                    ]
+                    all_entries.extend(page_entries)
+
+                    # Check if there are more pages
+                    has_more = response_json.get("has_more", False)
+                    cursor = response_json.get("cursor")
+
+            return all_entries
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def get_metadata(
         self, path: str, include_property_groups: list[str] | None = None
@@ -162,41 +177,52 @@ class DropboxAPIClient:
         Returns:
             FileOrFolderInfo containing metadata for the file or folder.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
-
-        data = {
-            "include_deleted": False,
-            "include_has_explicit_shared_members": False,
-            "include_media_info": False,
-            "path": path,
-        }
-
-        if include_property_groups is not None:
-            data["include_property_groups"] = {
-                ".tag": "filter_some",
-                "filter_some": include_property_groups,
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
             }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/files/get_metadata"
+            data = {
+                "include_deleted": False,
+                "include_has_explicit_shared_members": False,
+                "include_media_info": False,
+                "path": path,
+            }
 
-        async with self._websession.post(url, headers=headers, json=data) as response:
-            await handle_common_errors(response)
+            if include_property_groups is not None:
+                data["include_property_groups"] = {
+                    ".tag": "filter_some",
+                    "filter_some": include_property_groups,
+                }
 
-            response_json = await response.json()
+            url = f"{DROPBOX_API_BASE_URL}/2/files/get_metadata"
 
-            return FileOrFolderInfo(
-                is_folder=response_json[".tag"] == "folder",
-                name=response_json["name"],
-                size=response_json["size"] if response_json[".tag"] == "file" else None,
-                property_groups=parse_property_groups(response_json["property_groups"])
-                if "property_groups" in response_json
-                else None,
-            )
+            async with self._websession.post(
+                url, headers=headers, json=data
+            ) as response:
+                await handle_common_errors(response)
+
+                response_json = await response.json()
+
+                return FileOrFolderInfo(
+                    is_folder=response_json[".tag"] == "folder",
+                    name=response_json["name"],
+                    size=response_json["size"]
+                    if response_json[".tag"] == "file"
+                    else None,
+                    property_groups=parse_property_groups(
+                        response_json["property_groups"]
+                    )
+                    if "property_groups" in response_json
+                    else None,
+                )
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def upload_file(
         self,
@@ -211,12 +237,17 @@ class DropboxAPIClient:
             file_stream: An async iterator of bytes to upload.
             property_groups: Optional list of property groups to attach to the uploaded file.
         """
-        CHUNK_SIZE = 16 * 1024 * 1024  # 16MB chunks
+        try:
+            CHUNK_SIZE = 16 * 1024 * 1024  # 16MB chunks
 
-        # Always use chunked upload approach
-        await self._upload_file_chunked(
-            CONTENT_API_BASE_URL, path, file_stream, CHUNK_SIZE, property_groups
-        )
+            # Always use chunked upload approach
+            await self._upload_file_chunked(
+                CONTENT_API_BASE_URL, path, file_stream, CHUNK_SIZE, property_groups
+            )
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def _upload_file_chunked(
         self,
@@ -386,21 +417,26 @@ class DropboxAPIClient:
         Yields:
             Chunks of file content as bytes.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Dropbox-API-Arg": json.dumps({"path": path}),
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Dropbox-API-Arg": json.dumps({"path": path}),
+            }
 
-        url = f"{CONTENT_API_BASE_URL}/2/files/download"
-        chunk_size = 1024 * 1024  # 1MB
+            url = f"{CONTENT_API_BASE_URL}/2/files/download"
+            chunk_size = 1024 * 1024  # 1MB
 
-        async with self._websession.post(url, headers=headers) as response:
-            response.raise_for_status()
-            async for chunk in response.content.iter_chunked(chunk_size):
-                if chunk:
-                    yield chunk
+            async with self._websession.post(url, headers=headers) as response:
+                response.raise_for_status()
+                async for chunk in response.content.iter_chunked(chunk_size):
+                    if chunk:
+                        yield chunk
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def create_folder(self, path: str) -> FileOrFolderInfo:
         """Create a folder in Dropbox.
@@ -411,23 +447,28 @@ class DropboxAPIClient:
         Returns:
             FileOrFolderInfo containing metadata for the created folder.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/files/create_folder_v2"
-        payload = {
-            "path": path,
-            "autorename": False,
-        }
+            url = f"{DROPBOX_API_BASE_URL}/2/files/create_folder_v2"
+            payload = {
+                "path": path,
+                "autorename": False,
+            }
 
-        async with self._websession.post(
-            url, headers=headers, json=payload
-        ) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(
+                url, headers=headers, json=payload
+            ) as response:
+                await handle_common_errors(response)
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def delete_file(self, path: str) -> None:
         """Delete a file (moves to Dropbox trash).
@@ -435,20 +476,25 @@ class DropboxAPIClient:
         Args:
             path: The Dropbox path of the file to delete.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/files/delete_v2"
-        payload = {"path": path}
+            url = f"{DROPBOX_API_BASE_URL}/2/files/delete_v2"
+            payload = {"path": path}
 
-        async with self._websession.post(
-            url, headers=headers, json=payload
-        ) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(
+                url, headers=headers, json=payload
+            ) as response:
+                await handle_common_errors(response)
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def list_property_templates(self) -> list[str]:
         """List property group templates for the current user.
@@ -456,20 +502,25 @@ class DropboxAPIClient:
         Returns:
             A list of template IDs for property group templates.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "",
+            }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/list_for_user"
+            url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/list_for_user"
 
-        async with self._websession.post(url, headers=headers) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(url, headers=headers) as response:
+                await handle_common_errors(response)
 
-            response_json = await response.json()
-            return response_json["template_ids"]
+                response_json = await response.json()
+                return response_json["template_ids"]
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def add_property_template(self, template: PropertyTemplate) -> str:
         """Add a property group template for the current user.
@@ -480,34 +531,41 @@ class DropboxAPIClient:
         Returns:
             A string containing the template ID.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
-        # Convert the template to the format expected by the API
-        data = {
-            "name": template.name,
-            "description": template.description,
-            "fields": [
-                {
-                    "name": field.name,
-                    "description": field.description,
-                    "type": field.type,
-                }
-                for field in template.fields
-            ],
-        }
+            # Convert the template to the format expected by the API
+            data = {
+                "name": template.name,
+                "description": template.description,
+                "fields": [
+                    {
+                        "name": field.name,
+                        "description": field.description,
+                        "type": field.type,
+                    }
+                    for field in template.fields
+                ],
+            }
 
-        url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/add_for_user"
+            url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/add_for_user"
 
-        async with self._websession.post(url, headers=headers, json=data) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(
+                url, headers=headers, json=data
+            ) as response:
+                await handle_common_errors(response)
 
-            response_json = await response.json()
-            return response_json["template_id"]
+                response_json = await response.json()
+                return response_json["template_id"]
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def remove_property_template(self, template_id: str) -> None:
         """Remove a property group template for the current user.
@@ -515,19 +573,26 @@ class DropboxAPIClient:
         Args:
             template_id: The ID of the property template to remove.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
-        data = {"template_id": template_id}
+            data = {"template_id": template_id}
 
-        url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/remove_for_user"
+            url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/remove_for_user"
 
-        async with self._websession.post(url, headers=headers, json=data) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(
+                url, headers=headers, json=data
+            ) as response:
+                await handle_common_errors(response)
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err
 
     async def get_property_template(self, template_id: str) -> PropertyTemplate:
         """Get a property group template for the current user.
@@ -538,35 +603,42 @@ class DropboxAPIClient:
         Returns:
             The PropertyTemplate.
         """
-        access_token = await self._auth.async_get_access_token()
+        try:
+            access_token = await self._auth.async_get_access_token()
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
-        data = {"template_id": template_id}
+            data = {"template_id": template_id}
 
-        url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/get_for_user"
+            url = f"{DROPBOX_API_BASE_URL}/2/file_properties/templates/get_for_user"
 
-        async with self._websession.post(url, headers=headers, json=data) as response:
-            await handle_common_errors(response)
+            async with self._websession.post(
+                url, headers=headers, json=data
+            ) as response:
+                await handle_common_errors(response)
 
-            response_json = await response.json()
+                response_json = await response.json()
 
-            fields = [
-                PropertyField(
-                    name=field["name"],
-                    description=field["description"],
-                    type=field["type"][".tag"]
-                    if isinstance(field["type"], dict)
-                    else field["type"],
+                fields = [
+                    PropertyField(
+                        name=field["name"],
+                        description=field["description"],
+                        type=field["type"][".tag"]
+                        if isinstance(field["type"], dict)
+                        else field["type"],
+                    )
+                    for field in response_json["fields"]
+                ]
+
+                return PropertyTemplate(
+                    name=response_json["name"],
+                    description=response_json["description"],
+                    fields=fields,
                 )
-                for field in response_json["fields"]
-            ]
-
-            return PropertyTemplate(
-                name=response_json["name"],
-                description=response_json["description"],
-                fields=fields,
-            )
+        except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+            raise
+        except Exception as err:
+            raise DropboxUnknownException(str(err)) from err

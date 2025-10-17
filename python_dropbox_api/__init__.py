@@ -1,6 +1,10 @@
 from .auth import Auth
 from .client import DropboxAPIClient
-from .exceptions import DropboxAuthException, DropboxFileOrFolderNotFoundException
+from .exceptions import (
+    DropboxAuthException,
+    DropboxFileOrFolderNotFoundException,
+    DropboxUnknownException,
+)
 from .models import (
     AccountInfo,
     PropertyField,
@@ -15,6 +19,7 @@ __all__ = [
     "DropboxAPIClient",
     "DropboxAuthException",
     "DropboxFileOrFolderNotFoundException",
+    "DropboxUnknownException",
     "PropertyField",
     "PropertyFieldValue",
     "PropertyGroup",
