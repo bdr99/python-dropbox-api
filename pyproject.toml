@@ -1,6 +1,6 @@
 [project]
 name = "python-dropbox-api"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = [
     {name = "Brandon Rothweiler",email = "2292715+bdr99@users.noreply.github.com"}
