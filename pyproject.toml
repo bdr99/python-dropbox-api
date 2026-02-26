@@ -1,7 +1,7 @@
 [project]
 name = "python-dropbox-api"
 version = "0.1.2"
-description = ""
+description = "This is a lightweight wrapper for the Dropbox API intended for use in Home Assistant."
 authors = [
     {name = "Brandon Rothweiler",email = "2292715+bdr99@users.noreply.github.com"}
 ]
