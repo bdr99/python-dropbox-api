@@ -34,22 +34,26 @@ def parse_property_groups(property_groups: list[dict]) -> list[PropertyGroup]:
         )
         for group in property_groups
     ]
-
-
+    
 async def handle_common_errors(response: ClientResponse) -> None:
     """Handle common errors."""
-    response_json = await response.json()
+    if response.status < 400:
+        return
 
-    error_summary = response_json.get("error_summary")
+    try:
+        response_json = await response.json(content_type=None)
+    except Exception:
+        response_json = None
 
-    if error_summary is not None:
-        if error_summary.startswith("invalid_access_token/"):
-            raise DropboxAuthException("Unauthorized")
-        if error_summary.startswith("path/not_found/"):
-            raise DropboxFileOrFolderNotFoundException("File or folder not found")
+    if isinstance(response_json, dict):
+        error_summary = response_json.get("error_summary")
+        if error_summary is not None:
+            if error_summary.startswith("invalid_access_token/"):
+                raise DropboxAuthException("Unauthorized")
+            if error_summary.startswith("path/not_found/"):
+                raise DropboxFileOrFolderNotFoundException("File or folder not found")
 
-    response.raise_for_status()
-
+    raise DropboxUnknownException(f"HTTP {response.status}: {response.reason}")
 
 class DropboxAPIClient:
     """Lightweight Dropbox API client."""
