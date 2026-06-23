@@ -38,6 +38,9 @@ def parse_property_groups(property_groups: list[dict]) -> list[PropertyGroup]:
 
 async def handle_common_errors(response: ClientResponse) -> None:
     """Handle common errors."""
+    if response.ok:
+        return
+
     try:
         response_json = await response.json(content_type=None)
 
@@ -51,9 +54,8 @@ async def handle_common_errors(response: ClientResponse) -> None:
     except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
         raise
     except json.JSONDecodeError:
-        if not response.ok:
-            text = await response.text()
-            raise DropboxUnknownException(f"{response.status}: {text}")
+        text = await response.text()
+        raise DropboxUnknownException(f"{response.status}: {text}")
 
     response.raise_for_status()
 
@@ -441,7 +443,7 @@ class DropboxAPIClient:
             chunk_size = 1024 * 1024  # 1MB
 
             async with self._websession.post(url, headers=headers) as response:
-                response.raise_for_status()
+                await handle_common_errors(response)
                 async for chunk in response.content.iter_chunked(chunk_size):
                     if chunk:
                         yield chunk
