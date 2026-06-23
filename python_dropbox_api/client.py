@@ -472,6 +472,18 @@ class DropboxAPIClient:
                 url, headers=headers, json=payload
             ) as response:
                 await handle_common_errors(response)
+
+                response_json = await response.json()
+
+                # create_folder_v2 wraps the folder metadata under "metadata".
+                metadata = response_json["metadata"]
+
+                return FileOrFolderInfo(
+                    is_folder=True,
+                    name=metadata["name"],
+                    size=None,
+                    property_groups=None,
+                )
         except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
             raise
         except Exception as err:
