@@ -38,15 +38,22 @@ def parse_property_groups(property_groups: list[dict]) -> list[PropertyGroup]:
 
 async def handle_common_errors(response: ClientResponse) -> None:
     """Handle common errors."""
-    response_json = await response.json()
+    try:
+        response_json = await response.json(content_type=None)
 
-    error_summary = response_json.get("error_summary")
+        error_summary = response_json.get("error_summary") if isinstance(response_json, dict) else None
 
-    if error_summary is not None:
-        if error_summary.startswith("invalid_access_token/"):
-            raise DropboxAuthException("Unauthorized")
-        if error_summary.startswith("path/not_found/"):
-            raise DropboxFileOrFolderNotFoundException("File or folder not found")
+        if error_summary is not None:
+            if error_summary.startswith("invalid_access_token/"):
+                raise DropboxAuthException("Unauthorized")
+            if error_summary.startswith("path/not_found/"):
+                raise DropboxFileOrFolderNotFoundException("File or folder not found")
+    except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
+        raise
+    except json.JSONDecodeError:
+        if not response.ok:
+            text = await response.text()
+            raise DropboxUnknownException(f"{response.status}: {text}")
 
     response.raise_for_status()
 
