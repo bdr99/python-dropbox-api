@@ -306,6 +306,11 @@ class DropboxAPIClient:
                 )
             offset += len(buffer)
 
+        # Empty file (or a stream that yielded no bytes): no session was ever
+        # started, so open one with no data before finishing.
+        if session_id is None:
+            session_id = await self._start_upload_session(content_api_url, b"")
+
         # Finish upload session
         await self._finish_upload_session(
             content_api_url, session_id, offset, path, property_groups
