@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 import json
 
 from aiohttp import ClientResponse
@@ -238,6 +238,7 @@ class DropboxAPIClient:
         path: str,
         file_stream: AsyncIterator[bytes],
         property_groups: list[PropertyGroup] | None = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> None:
         """Upload a file to Dropbox using chunked upload sessions.
 
@@ -245,13 +246,19 @@ class DropboxAPIClient:
             path: The Dropbox path where the file should be uploaded.
             file_stream: An async iterator of bytes to upload.
             property_groups: Optional list of property groups to attach to the uploaded file.
+            progress_callback: Optional callback called with the total number of bytes uploaded after each chunk is sent.
         """
         try:
             CHUNK_SIZE = 16 * 1024 * 1024  # 16MB chunks
 
             # Always use chunked upload approach
             await self._upload_file_chunked(
-                CONTENT_API_BASE_URL, path, file_stream, CHUNK_SIZE, property_groups
+                CONTENT_API_BASE_URL,
+                path,
+                file_stream,
+                CHUNK_SIZE,
+                property_groups,
+                progress_callback,
             )
         except (DropboxAuthException, DropboxFileOrFolderNotFoundException):
             raise
@@ -265,6 +272,7 @@ class DropboxAPIClient:
         file_stream: AsyncIterator[bytes],
         chunk_size: int,
         property_groups: list[PropertyGroup] | None = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> None:
         """Upload a file using chunked upload sessions, streaming chunks without loading entire file into memory."""
         session_id = None
@@ -295,6 +303,8 @@ class DropboxAPIClient:
                     )
 
                 offset += len(chunk_data)
+                if progress_callback:
+                    progress_callback(offset)
 
         # Handle remaining data in buffer (final partial chunk)
         if buffer:
@@ -307,6 +317,8 @@ class DropboxAPIClient:
                     content_api_url, session_id, offset, buffer
                 )
             offset += len(buffer)
+            if progress_callback:
+                progress_callback(offset)
 
         # Empty file (or a stream that yielded no bytes): no session was ever
         # started, so open one with no data before finishing.
